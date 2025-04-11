@@ -1,4 +1,4 @@
-# darwin_fiftyone
+# darwin-fiftyone
 
 Provides an integration between Voxel51 and V7 Darwin. This enables Voxel51 users to send subsets of their datasets to Darwin for annotation and review. The annotated data can then be imported back into Voxel51.
 
