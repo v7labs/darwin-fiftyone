@@ -1640,7 +1640,6 @@ class DarwinAPI(foua.AnnotationAPI):
 
                 full_annotations.update({label_field: {label_type: sample_annotations}})
 
-        logging.info(f"Full annotations: {full_annotations}")
         return full_annotations
 
     def _generate_export(self, release_path, dataset):
