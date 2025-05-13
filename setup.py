@@ -1,7 +1,12 @@
+from pathlib import Path
 from setuptools import setup, find_packages
 
 # Read requirements while filtering out comments and development dependencies
-with open("requirements.txt") as f:
+requirements_path = "requirements.txt"
+if not Path(requirements_path).exists():
+    requirements_path = "darwin_fiftyone.egg-info/requires.txt"
+
+with open(requirements_path) as f:
     requirements = [
         line.strip()
         for line in f
