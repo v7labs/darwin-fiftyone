@@ -13,7 +13,7 @@ with open("requirements.txt") as f:
 
 setup(
     name="darwin-fiftyone",
-    version="1.1.22",
+    version="1.1.23",
     description="Integration between V7 Darwin and Voxel51",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
