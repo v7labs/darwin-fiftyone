@@ -897,7 +897,7 @@ class DarwinAPI(foua.AnnotationAPI):
             raise ValueError(f"No type specified for property {prop}")
 
         property_type = property_dict["type"]
-        vals = property_dict["values"]
+        vals = property_dict.get("values", [])
         granularity = property_dict.get(
             "granularity",
             "item" if is_item_property else "section"

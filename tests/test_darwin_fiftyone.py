@@ -721,12 +721,11 @@ def test_annotate_full_label_schema(setup_quickstart):
                     "required": True,
                     "values": ["val1", "val2"],
                 },
-                "text_item_prop": {"type": "text", "granularity": "item", "values": []},
+                "text_item_prop": {"type": "text", "granularity": "item"},
                 "text_item_prop_required": {
                     "type": "text",
                     "granularity": "item",
                     "required": True,
-                    "values": [],
                 },
             },
         },
