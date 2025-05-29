@@ -133,7 +133,12 @@ class DarwinBackend(foua.AnnotationBackend):
 
     @property
     def supported_attr_types(self):
-        return ["text", "select", "radio", "instance_id"]
+        return [
+            "text",
+            "instance_id",
+            "single_select",
+            "multi_select",
+        ]
 
     @property
     def supports_keyframes(self):
@@ -789,113 +794,134 @@ class DarwinAPI(foua.AnnotationAPI):
             logging.debug(
                 f"_create_missing_annotation_classes label_type:{label_type} classes:{classes}"
             )
-            class_list = []
+
+            classes_to_create = []
+            classes_in_team = []
             for cls in classes:
-                cls_type = type(cls)
-                if cls_type is dict:
-                    class_list += cls["classes"]
-                else:
-                    class_list.append(cls)
-
-            for new_cls in class_list:
-                if (
-                    new_cls,
-                    annotation_type_translation,
-                ) not in classname_anntype_to_class:
-
-                    # Create the annotation class if it doesn't exist
-                    logging.debug(
-                        f"_create_missing_annotation_classes creating class cls:{new_cls} annotation_type_translation:{annotation_type_translation}"
-                    )
-                    subtypes = ["text"]
-
-                    if isinstance(cls, dict):
-                        # Add instance ID as a subtype if specified
-                        attributes = cls.get("attributes", {})
-                        for attribute in attributes:
-                            if attributes[attribute]["type"] == "instance_id":
-                                subtypes.append("instance_id")
-                                break
-
-                    dataset.create_annotation_class(
-                        new_cls, annotation_type_translation, subtypes
-                    )
-                else:
-                    # if it exists but isn't in the dataset, add it
-                    matching_class = classname_anntype_to_class[
-                        (new_cls, annotation_type_translation)
+                class_type = type(cls)
+                if class_type is str:
+                    if (
+                        cls,
+                        annotation_type_translation,
+                    ) not in classname_anntype_to_class:
+                        classes_to_create.append(cls)
+                    else:
+                        classes_in_team.append(cls)
+                elif class_type is dict:
+                    for subclass in cls["classes"]:
+                        if (
+                            subclass,
+                            annotation_type_translation,
+                        ) in classname_anntype_to_class:
+                            classes_in_team.append(subclass)
+                    cls["classes"] = [
+                        c for c in cls["classes"] if c not in classes_in_team
                     ]
-                    logging.debug(
-                        f"_create_missing_annotation_classes class exists cls:{new_cls} in datasets:{matching_class['datasets']}"
-                    )
-                    datasets = [dataset["id"] for dataset in matching_class["datasets"]]
-                    if dataset.dataset_id not in datasets:
-                        logging.debug(
-                            f"_create_missing_annotation_classes adding to dataset cls:{new_cls}"
-                        )
-                        dataset.add_annotation_class(matching_class["id"])
+                    if cls["classes"]:
+                        classes_to_create.append(cls)
 
-            # If properties then add properties
-            if cls_type is dict:
-                self._add_props_label_schema(backend, team_slug, label_schema)
+            # Only create annotation classes that don't already exist
+            for new_cls in classes_to_create:
+                class_type = type(new_cls)
+                # Create the annotation class if it doesn't exist
+                logging.debug(
+                    f"Creating class cls:{new_cls} annotation_type_translation:{annotation_type_translation}"
+                )
+                if class_type is str:
+                    subtypes = []
+                    classes = [new_cls]
+                elif class_type is dict:
+                    classes = new_cls["classes"]
+                    subtypes = []
+                    for attribute in new_cls["attributes"]:
+                        if new_cls["attributes"][attribute]["type"] == "instance_id":
+                            subtypes.append("instance_id")
+                        if new_cls["attributes"][attribute]["type"] == "text":
+                            subtypes.append("text")
+
+                for cls in classes:
+                    dataset.create_annotation_class(
+                        cls, annotation_type_translation, subtypes
+                    )
+
+                # If properties then add properties
+                if class_type is dict:
+                    self._create_properties(backend, team_slug, new_cls, label_type)
+
+            for cls in classes_in_team:
+                # if it exists but isn't in the dataset, add it to the dataset
+                matching_class = classname_anntype_to_class[
+                    (cls, annotation_type_translation)
+                ]
+                datasets = [dataset["id"] for dataset in matching_class["datasets"]]
+                if dataset.dataset_id not in datasets:
+                    logging.debug(
+                        f"_create_missing_annotation_classes adding to dataset cls:{cls}"
+                    )
+                    dataset.add_annotation_class(matching_class["id"])
+
+            # Create item level properties
+            self._create_item_properties(
+                backend, team_slug, label_schema, label_type, dataset.dataset_id
+            )
 
     def _extract_properties(
-        self, backend, team_slug, class_schema, cls, prop, label_type
+        self, backend, team_slug, class_schema, prop, label_type, cls=None
     ):
         """
         Extracts properties from a label schema class.
 
-        Parameters
+        If `cls` is not provided, the property is assumed to be an item level property.
 
+        Parameters
+        ----------
         class_schema : dict
             The class schema to extract properties from.
-
+        prop : str
+            The property name to extract
 
         Returns
+        -------
+        dict
+            The extracted property configuration
 
-            list
-            A list of properties extracted from the label schema.
+        Raises
+        ------
+        ValueError
+            If the property type is not recognized or no type is specified
         """
-        if "type" in class_schema["attributes"][prop]:
-            if class_schema["attributes"][prop]["type"] == "select":
-                select_type = "single_select"
-            elif class_schema["attributes"][prop]["type"] == "radio":
-                logging.info(
-                    "Radio attribute not supported in V7 Darwin. Converting to single select property."
-                )
-                select_type = "single_select"
-            else:
-                select_type = "multi_select"
-        else:
-            logging.info("No type found for property, defaulting to single_select")
-            select_type = "single_select"
+        is_item_property = cls is None
 
-        vals = class_schema["attributes"][prop]["values"]
+        property_dict = class_schema["attributes"][prop]
+        if "type" not in property_dict:
+            raise ValueError(f"No type specified for property {prop}")
+
+        property_type = property_dict["type"]
+        vals = property_dict.get("values", [])
+        granularity = property_dict.get(
+            "granularity",
+            "item" if is_item_property else "section"
+        )
+        required = property_dict.get("required", False)
         cls_id = self._get_annot_class_id(backend, team_slug, cls, label_type)
-        assert (
-            cls_id is not None
-        ), "Please check that the annotation class has been created before trying to add properties"
-
         payload = {
-            "required": False,
-            "type": select_type,
-            "annotation_class_id": cls_id,
+            "required": required,
+            "type": property_type,
+            "granularity": granularity,
             "name": prop,
             "description": "",
             "property_values": [],
         }
+        if not is_item_property:
+            payload["annotation_class_id"] = cls_id
 
         for val in vals:
             val_dict = {
                 "type": "string",
-                "color": "rgba(58,23,197,1.0)",
+                "color": f"rgba({random.randint(0,255)},{random.randint(0,255)},{random.randint(0,255)},1.0)",
                 "value": str(val),
             }
             payload["property_values"].append(val_dict)
-
-        assert payload[
-            "property_values"
-        ], "Please ensure that all select attributes have a list of possible values in your label schema"
         logging.info(f"Extracted properties: {payload}")
         return payload
 
@@ -963,9 +989,10 @@ class DarwinAPI(foua.AnnotationAPI):
 
         return None
 
-    def _upload_props(self, backend, team_slug, class_schema, label_type):
+    def _create_properties(self, backend, team_slug, class_schema, label_type):
         """
-        Adds properties to a given class in a label_schema
+        Creates properties for a given class in a label_schema. If the property already exists, it will be updated with
+        additional values.
 
         Parameters
         ----------
@@ -985,59 +1012,157 @@ class DarwinAPI(foua.AnnotationAPI):
         """
         base_url = backend.config.base_url
         url = f"{base_url}/{team_slug}/properties"
-
         headers = self._get_headers()
 
         for prop in class_schema["attributes"].keys():
             if "text" in class_schema["attributes"][prop]["type"]:
                 logging.info(
-                    "Text attribute not supported in V7 Darwin. Please use the test subattribute instead."
+                    "Text attribute not supported in V7 Darwin. Please use the text subattribute instead."
                 )
                 continue
             if "instance_id" in class_schema["attributes"][prop]["type"]:
                 logging.info(
-                    "Instance ID subtype not associated with values. Continuing."
+                    "Instance ID subtype cannot be associated with values. Continuing."
                 )
                 continue
 
             for cls in class_schema["classes"]:
-
                 payload = self._extract_properties(
-                    backend, team_slug, class_schema, cls, prop, label_type
+                    backend, team_slug, class_schema, prop, label_type, cls
                 )
                 cls_id = payload["annotation_class_id"]
-
-                properties_check = self._check_properties(backend, team_slug, cls_id)[
-                    "properties"
-                ]
-
+                properties_check = self._check_properties(
+                    backend, team_slug, cls_id, prop
+                )
                 if not properties_check:
                     response = requests.post(url, json=payload, headers=headers)
-                    if response.ok:
-                        return "Success"
-                    else:
+                    if not response.ok:
                         raise requests.exceptions.HTTPError(
                             f"POST request failed with status code {response.status_code}."
                         )
-
                 else:
-                    prop_id = self._get_property_id(properties_check, prop)
-                    url = f"{base_url}/{team_slug}/properties/{prop_id}"
-                    response = requests.put(url, json=payload, headers=headers)
-                    if response.ok:
-                        return "Success"
-                    elif response.status_code == 422:
-                        logging.info(
-                            f"Property {prop} already exists in class {cls} with the same values"
-                        )
-                    else:
-                        raise requests.exceptions.HTTPError(
-                            f"PUT request failed with status code {response.status_code}."
-                        )
+                    current_property_values = [
+                        val["value"] for val in properties_check[0]["property_values"]
+                    ]
+                    payload_property_values = [
+                        val["value"] for val in payload["property_values"]
+                    ]
+                    if any(
+                        val not in current_property_values
+                        for val in payload_property_values
+                    ):
+                        prop_id = self._get_property_id(properties_check, prop)
+                        url = f"{base_url}/{team_slug}/properties/{prop_id}"
+                        del payload["granularity"]
+                        response = requests.put(url, json=payload, headers=headers)
+                        if not response.ok:
+                            raise requests.exceptions.HTTPError(
+                                f"PUT request failed with status code {response.status_code}."
+                            )
 
-    def _check_properties(self, backend, team_slug, class_id):
+    def _create_item_properties(
+        self, backend, team_slug, label_schema, label_type, dataset_id
+    ):
         """
-        Checks for properties in a given class
+        Creates item level properties for a given label_schema.
+        """
+        base_url = backend.config.base_url
+        headers = self._get_headers()
+
+        for label_field, label_info in label_schema.items():
+            for item_property_name in label_info["attributes"]:
+
+                if "instance_id" in label_info["attributes"][item_property_name]["type"]:
+                    # instance_id is not to be considered as item property
+                    continue
+                payload = self._extract_properties(
+                    backend,
+                    team_slug,
+                    label_schema[label_field],
+                    item_property_name,
+                    label_type,
+                )
+                properties_check = self._check_item_properties(
+                    backend, team_slug, item_property_name
+                )
+                if not properties_check:
+                    url = f"{base_url}/{team_slug}/properties"
+                    payload["dataset_ids"] = [dataset_id]
+                    response = requests.post(url, json=payload, headers=headers)
+                    if not response.ok:
+                        raise requests.exceptions.HTTPError(
+                            f"POST request failed with status code {response.status_code}."
+                        )
+                    continue
+                else:
+                    current_property_values = [
+                        val["value"] for val in properties_check[0]["property_values"]
+                    ]
+                    payload_property_values = [
+                        val["value"] for val in payload["property_values"]
+                    ]
+                    if any(
+                        val not in current_property_values
+                        for val in payload_property_values
+                    ):
+                        prop_id = self._get_property_id(
+                            properties_check, item_property_name
+                        )
+                        url = f"{base_url}/{team_slug}/properties/{prop_id}"
+                        del payload["granularity"]
+                        response = requests.put(url, json=payload, headers=headers)
+                        if not response.ok:
+                            raise requests.exceptions.HTTPError(
+                                f"PUT request failed with status code {response.status_code}."
+                            )
+                    # If needed, assign the item property to the dataset
+                    if dataset_id not in properties_check[0]["dataset_ids"]:
+                        prop_id = self._get_property_id(
+                            properties_check, item_property_name
+                        )
+                        dataset_ids = properties_check[0]["dataset_ids"] + [dataset_id]
+                        # The below is a workaround for DAR-5770
+                        # It should be removed once the issue is resolved
+                        current_datasets = self._get_datasets(backend, team_slug)
+                        current_dataset_ids = [
+                            dataset["id"] for dataset in current_datasets
+                        ]
+                        dataset_ids = [
+                            dataset_id
+                            for dataset_id in dataset_ids
+                            if dataset_id in current_dataset_ids
+                        ]
+                        url = f"{base_url}/{team_slug}/properties/{prop_id}"
+                        response = requests.put(
+                            url,
+                            json={
+                                "dataset_ids": dataset_ids,
+                                "name": item_property_name,
+                            },
+                            headers=headers,
+                        )
+                        if not response.ok:
+                            raise requests.exceptions.HTTPError(
+                                f"PUT request failed with status code {response.status_code}."
+                            )
+
+    def _check_item_properties(self, backend, team_slug, item_property_name):
+        """
+        Check for the existence of a given item property
+        """
+        base_url = backend.config.base_url
+        url = f"{base_url}/{team_slug}/properties?include_values=true"
+        headers = self._get_headers()
+        response = requests.get(url, headers=headers)
+        item_properties = json.loads(response.text)["properties"]
+        for prop in item_properties:
+            if prop["name"] == item_property_name:
+                return [prop]
+        return []
+
+    def _check_properties(self, backend, team_slug, class_id, prop_name):
+        """
+        Checks for the existence of a given property in a class
 
         Parameters
         ----------
@@ -1053,13 +1178,14 @@ class DarwinAPI(foua.AnnotationAPI):
             A dictionary containing all properties in a class.
         """
         base_url = backend.config.base_url
-        url = f"{base_url}/{team_slug}/properties?annotation_class_ids[]={class_id}&include_values=false"
-
+        url = f"{base_url}/{team_slug}/properties?annotation_class_ids[]={class_id}&include_values=true"
         headers = self._get_headers()
-
         response = requests.get(url, headers=headers)
-
-        return json.loads(response.text)
+        properties = json.loads(response.text)["properties"]
+        for prop in properties:
+            if prop["name"] == prop_name:
+                return [prop]
+        return []
 
     def _get_property_id(self, properties, name):
         """
@@ -1080,35 +1206,6 @@ class DarwinAPI(foua.AnnotationAPI):
                 return prop["id"]
 
         return None
-
-    def _add_props_label_schema(self, backend, team_slug, label_schema):
-        """
-        Iterates through a label schema and adds properties to all the classes
-
-        Parameters
-        ----------
-        team_slug : str
-            The slug (unique identifier) of the team in the V7 Darwin platform.
-
-        label_schema : dict
-            The Voxel51 label schema to extract properties from.
-
-        Returns
-        -------
-        str
-            A string indicating the success of the operation.
-        """
-        label_fields = label_schema.keys()
-        for field in label_fields:
-            label_data = label_schema[field]
-            label_type = label_data["type"]
-            for cls in label_data["classes"]:
-                self._upload_props(backend, team_slug, cls, label_type)
-                logging.info(
-                    f"Properties added for class {cls} in label schema {field}"
-                )
-
-        return "Success"
 
     def to_darwin_annotation_type(self, type):
         if type == "detections" or type == "detection":
@@ -1390,7 +1487,7 @@ class DarwinAPI(foua.AnnotationAPI):
                                     voxel_annotation[key] = val
 
                             if voxel_annotation.id in annotations:
-                                if type(voxel_annotation) == fol.Keypoint:
+                                if type(voxel_annotation) is fol.Keypoint:
                                     annotations[voxel_annotation.id].points.extend(
                                         voxel_annotation.points
                                     )
@@ -1618,7 +1715,7 @@ class DarwinAPI(foua.AnnotationAPI):
                                     voxel_annotation[key] = val
 
                             if voxel_annotation.id in annotations:
-                                if type(voxel_annotation) == fol.Keypoint:
+                                if type(voxel_annotation) is fol.Keypoint:
                                     annotations[voxel_annotation.id].points.extend(
                                         voxel_annotation.points
                                     )
@@ -1640,6 +1737,7 @@ class DarwinAPI(foua.AnnotationAPI):
 
                 full_annotations.update({label_field: {label_type: sample_annotations}})
 
+        logging.info(f"Full annotations: {full_annotations}")
         return full_annotations
 
     def _generate_export(self, release_path, dataset):
@@ -1715,6 +1813,12 @@ class DarwinAPI(foua.AnnotationAPI):
             raise requests.exceptions.HTTPError(
                 f"PATCH request failed with status code {response.status_code}."
             )
+
+    def _get_datasets(self, backend, team_slug):
+        url = "/".join(backend.config.base_url.split("/")[0:4]) + "/datasets"
+        headers = self._get_headers()
+        response = requests.get(url, headers=headers)
+        return json.loads(response.text)
 
     def _delete_dataset_id(self, dataset_id, base_url):
         url = f"{base_url}/datasets/{dataset_id}/archive"
@@ -2159,7 +2263,7 @@ def _list_items(api_key, dataset_id, team_slug, base_url):
                 url = None
         else:
             raise requests.exceptions.HTTPError(
-                f"GET request failed with status code {response.status_code}."
+                f"GET request failed with status code {response.status_code}, {response.text}."
             )
 
     return items

@@ -29,7 +29,6 @@ import darwin.future.core.client as dfcc
 from darwin.cli_functions import remove_remote_dataset
 from darwin.client import Client
 
-
 logger = logging.getLogger(__name__)
 
 team_slug = os.environ["FIFTYONE_DARWIN_TEAM_SLUG"]
@@ -603,7 +602,7 @@ def test_annotate_vid_example():
     dataset.load_annotations(anno_key)
 
 
-def test_mutli_slot():
+def test_multi_slot():
     """Tests multi-slot annotation"""
     group_dataset = foz.load_zoo_dataset("quickstart-groups")
     group_ids = group_dataset.take(3).values("group.id")
@@ -629,6 +628,124 @@ def test_mutli_slot():
         base_url="https://darwin.irl.v7labs.com/api/v2/teams",
     )
     group_dataset.load_annotations(anno_key)
+
+
+def test_annotate_full_label_schema(setup_quickstart):
+    """Tests all avialable class & property permutations"""
+
+    dsn = "fo-v7-test-full-label-schema"
+    if fo.dataset_exists(dsn):
+        fo.delete_dataset(dsn)
+
+    dataset = foz.load_zoo_dataset("quickstart", max_samples=2, dataset_name=dsn)
+    dataset.delete_sample_fields(["predictions"])
+
+    label_schema = {
+        "ground_truth": {
+            "type": "detections",
+            "classes": [
+                {
+                    "classes": ["class1", "class2"],
+                    "attributes": {
+                        "single_select_section_level": {
+                            "type": "single_select",
+                            "granularity": "section",
+                            "values": ["val1", "val2"],
+                        },
+                        "single_select_section_level_required": {
+                            "type": "single_select",
+                            "granularity": "section",
+                            "required": True,
+                            "values": ["val1", "val2"],
+                        },
+                        "multi_select_section_level": {
+                            "type": "multi_select",
+                            "granularity": "section",
+                            "values": ["val1", "val2"],
+                        },
+                        "multi_select_section_level_required": {
+                            "type": "multi_select",
+                            "granularity": "section",
+                            "required": True,
+                            "values": ["val1", "val2"],
+                        },
+                        "single_select_annotation_level": {
+                            "type": "single_select",
+                            "granularity": "annotation",
+                            "values": ["val1", "val2"],
+                        },
+                        "single_select_annotation_level_required": {
+                            "type": "single_select",
+                            "granularity": "annotation",
+                            "required": True,
+                            "values": ["val1", "val2"],
+                        },
+                        "multi_select_annotation_level": {
+                            "type": "multi_select",
+                            "granularity": "annotation",
+                            "values": ["val1", "val2"],
+                        },
+                        "multi_select_annotation_level_required": {
+                            "type": "multi_select",
+                            "granularity": "annotation",
+                            "required": True,
+                            "values": ["val1", "val2"],
+                        },
+                        "my_ids": {"type": "instance_id"},
+                        "my_text": {"type": "text"},
+                    },
+                },
+                "class3",
+                "class4",
+            ],
+            "attributes": {
+                "single_select_item_level": {
+                    "type": "single_select",
+                    "granularity": "item",
+                    "values": ["val1", "val2"],
+                },
+                "single_select_item_level_required": {
+                    "type": "single_select",
+                    "granularity": "item",
+                    "required": True,
+                    "values": ["val1", "val2"],
+                },
+                "multi_select_item_level": {
+                    "type": "multi_select",
+                    "granularity": "item",
+                    "values": ["val1", "val2"],
+                },
+                "multi_select_item_level_required": {
+                    "type": "multi_select",
+                    "granularity": "item",
+                    "required": True,
+                    "values": ["val1", "val2"],
+                },
+                "text_item_prop": {"type": "text", "granularity": "item"},
+                "text_item_prop_required": {
+                    "type": "text",
+                    "granularity": "item",
+                    "required": True,
+                },
+            },
+        },
+    }
+
+    dataset.annotate(
+        "full_label_schema",
+        label_schema=label_schema,
+        backend="darwin",
+        base_url="https://darwin.irl.v7labs.com/api/v2/teams",
+    )
+
+
+def test_load_full_label_schema():
+    """See test_annotate_external_media"""
+
+    dsn = "fo-v7-test-full-label-schema"
+    dataset = fo.load_dataset(dsn)
+    for anno_key in ["full_label_schema"]:
+        dataset.load_annotations(anno_key)
 
 
 ###########
