@@ -746,7 +746,6 @@ def test_load_full_label_schema():
     dsn = "fo-v7-test-full-label-schema"
     dataset = fo.load_dataset(dsn)
     for anno_key in ["full_label_schema"]:
-        breakpoint()
         dataset.load_annotations(anno_key)
 
 

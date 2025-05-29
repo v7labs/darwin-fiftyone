@@ -1067,17 +1067,13 @@ class DarwinAPI(foua.AnnotationAPI):
         Creates item level properties for a given label_schema.
         """
         base_url = backend.config.base_url
-        url = f"{base_url}/{team_slug}/properties"
         headers = self._get_headers()
 
         for label_field, label_info in label_schema.items():
             for item_property_name in label_info["attributes"]:
-                if (
-                    "text" in label_info["attributes"][item_property_name]["type"]
-                    or "instance_id"
-                    in label_info["attributes"][item_property_name]["type"]
-                ):
-                    # Text and instance_id are not to be considered as item properties
+
+                if "instance_id" in label_info["attributes"][item_property_name]["type"]:
+                    # instance_id is not to be considered as item property
                     continue
                 payload = self._extract_properties(
                     backend,
@@ -1090,6 +1086,7 @@ class DarwinAPI(foua.AnnotationAPI):
                     backend, team_slug, item_property_name
                 )
                 if not properties_check:
+                    url = f"{base_url}/{team_slug}/properties"
                     payload["dataset_ids"] = [dataset_id]
                     response = requests.post(url, json=payload, headers=headers)
                     if not response.ok:
