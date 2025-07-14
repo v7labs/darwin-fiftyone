@@ -176,6 +176,11 @@ def get_dataset_id_from_slug(dataset_slug):
     raise ValueError(f"Dataset with slug {dataset_slug} not found")
 
 
+@pytest.fixture(autouse=True, scope="session")
+def test_cleanup_before_run(session_mocker):
+    test_cleanup_all(session_mocker)
+
+
 def test_annotate_existing_class_det(setup_quickstart):
     """Test edit {existing field} x {classification, classifications, detections}
 
@@ -756,6 +761,7 @@ def list_classes():
     url = f"https://darwin.irl.v7labs.com/api/teams/{team_slug}/annotation_classes"
     headers = {"accept": "application/json", "Authorization": f"ApiKey {api_key}"}
     response = requests.get(url, headers=headers)
+    response.raise_for_status()
     return response.json()
 
 
@@ -763,6 +769,7 @@ def delete_class(class_id):
     url = f"https://darwin.irl.v7labs.com/api/annotation_classes/{class_id}"
     headers = {"accept": "application/json", "Authorization": f"ApiKey {api_key}"}
     response = requests.delete(url, headers=headers)
+    response.raise_for_status()
     print(response.text)
 
 
@@ -775,6 +782,7 @@ def list_workflows():
         "Authorization": f"ApiKey {api_key}",
     }
     response = requests.get(url, headers=headers)
+    response.raise_for_status()
     return response.json()
 
 
@@ -789,6 +797,7 @@ def detach_workflow(workflow):
     workflow_id = workflow["id"]
     url = f"https://darwin.irl.v7labs.com/api/v2/teams/{team_slug}/workflows/{workflow_id}/unlink_dataset"
     response = requests.patch(url, headers=headers)
+    response.raise_for_status()
     return response
 
 
@@ -802,6 +811,7 @@ def delete_workflow(workflow):
     workflow_id = workflow["id"]
     url = f"https://darwin.irl.v7labs.com/api/v2/teams/{team_slug}/workflows/{workflow_id}"
     response = requests.delete(url, headers=headers)
+    response.raise_for_status()
     print(response.text)
 
 
@@ -863,4 +873,6 @@ def test_cleanup_all(mocker):
 
     cls = list_classes()["annotation_classes"]
     for c in cls:
+        if c["name"] == "__raster_layer__":
+            continue
         delete_class(c["id"])
