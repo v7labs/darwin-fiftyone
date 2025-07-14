@@ -499,7 +499,7 @@ class DarwinAPI(foua.AnnotationAPI):
                         id_maps[sample.id].append(annotation.id)
 
             except Exception as e:
-                logging.error(f"Error converting image annotations to V7: {traceback.format_exc()}")
+                logging.exception("Error converting image annotations to V7")
 
         logging.info(f"Darwin annotations: {darwin_annotations}")
         return darwin_annotations
