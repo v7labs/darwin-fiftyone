@@ -173,7 +173,7 @@ class DarwinBackend(foua.AnnotationBackend):
         try:
             results = api.upload_annotations(samples, anno_key, self)
         except darwin.exceptions.ValidationError as e:
-            logging.exception(e)
+            logging.exception("Validation error during annotations upload")
             raise e
 
         if launch_editor:
