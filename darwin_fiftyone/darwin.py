@@ -5,6 +5,7 @@ import logging
 import random
 import string
 import tempfile
+import traceback
 import time
 import uuid
 import webbrowser
@@ -168,7 +169,12 @@ class DarwinBackend(foua.AnnotationBackend):
             logging.info(
                 f"No annotation key provided. Generating one with key: {anno_key}"
             )
-        results = api.upload_annotations(samples, anno_key, self)
+
+        try:
+            results = api.upload_annotations(samples, anno_key, self)
+        except darwin.exceptions.ValidationError as e:
+            logging.exception("Validation error during annotations upload")
+            raise e
 
         if launch_editor:
             results.launch_editor()
@@ -493,7 +499,7 @@ class DarwinAPI(foua.AnnotationAPI):
                         id_maps[sample.id].append(annotation.id)
 
             except Exception as e:
-                logging.error(f"Error converting image annotations to V7: {e}")
+                logging.exception("Error converting image annotations to V7")
 
         logging.info(f"Darwin annotations: {darwin_annotations}")
         return darwin_annotations
