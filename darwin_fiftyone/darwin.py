@@ -5,7 +5,6 @@ import logging
 import random
 import string
 import tempfile
-import traceback
 import time
 import uuid
 import webbrowser
@@ -173,7 +172,7 @@ class DarwinBackend(foua.AnnotationBackend):
         try:
             results = api.upload_annotations(samples, anno_key, self)
         except darwin.exceptions.ValidationError as e:
-            logging.exception("Validation error during annotations upload")
+            logging.error(f"Validation error during annotations upload: {e}")
             raise e
 
         if launch_editor:
@@ -499,7 +498,7 @@ class DarwinAPI(foua.AnnotationAPI):
                         id_maps[sample.id].append(annotation.id)
 
             except Exception as e:
-                logging.exception("Error converting image annotations to V7")
+                logging.error(f"Error converting image annotations to V7: {e}")
 
         logging.info(f"Darwin annotations: {darwin_annotations}")
         return darwin_annotations
@@ -819,6 +818,8 @@ class DarwinAPI(foua.AnnotationAPI):
                             subclass,
                             annotation_type_translation,
                         ) in classname_anntype_to_class:
+                            # Update with new property values
+                            self._create_properties(backend, team_slug, cls, label_type)
                             classes_in_team.append(subclass)
                     cls["classes"] = [
                         c for c in cls["classes"] if c not in classes_in_team
@@ -954,14 +955,8 @@ class DarwinAPI(foua.AnnotationAPI):
 
         headers = self._get_headers()
 
-        response = requests.get(url, headers=headers)
-
-        if response.ok:
-            return json.loads(response.text)
-        else:
-            raise requests.exceptions.HTTPError(
-                f"GET request failed with status code {response.status_code}."
-            )
+        response = DarwinAPIWrapper.get(url, headers=headers)
+        return json.loads(response.text)
 
     def _get_annot_class_id(self, backend, team_slug, name, label_type):
         """
@@ -1041,30 +1036,23 @@ class DarwinAPI(foua.AnnotationAPI):
                     backend, team_slug, cls_id, prop
                 )
                 if not properties_check:
-                    response = requests.post(url, json=payload, headers=headers)
-                    if not response.ok:
-                        raise requests.exceptions.HTTPError(
-                            f"POST request failed with status code {response.status_code}."
-                        )
+                    DarwinAPIWrapper.post(url, payload=payload, headers=headers)
                 else:
                     current_property_values = [
                         val["value"] for val in properties_check[0]["property_values"]
                     ]
-                    payload_property_values = [
-                        val["value"] for val in payload["property_values"]
-                    ]
-                    if any(
-                        val not in current_property_values
-                        for val in payload_property_values
-                    ):
+                    missing_property_values = []
+                    for val in payload["property_values"]:
+                        if val["value"] not in current_property_values:
+                            missing_property_values.append(val)
+                    if missing_property_values:
+                        payload["property_values"] = missing_property_values
                         prop_id = self._get_property_id(properties_check, prop)
                         url = f"{base_url}/{team_slug}/properties/{prop_id}"
                         del payload["granularity"]
-                        response = requests.put(url, json=payload, headers=headers)
-                        if not response.ok:
-                            raise requests.exceptions.HTTPError(
-                                f"PUT request failed with status code {response.status_code}."
-                            )
+                        if 'annotation_class_id' in payload:
+                            del payload['annotation_class_id']
+                        DarwinAPIWrapper.put(url, payload=payload, headers=headers)
 
     def _create_item_properties(
         self, backend, team_slug, label_schema, label_type, dataset_id
@@ -1077,8 +1065,10 @@ class DarwinAPI(foua.AnnotationAPI):
 
         for label_field, label_info in label_schema.items():
             for item_property_name in label_info["attributes"]:
-
-                if "instance_id" in label_info["attributes"][item_property_name]["type"]:
+                if (
+                    "instance_id"
+                    in label_info["attributes"][item_property_name]["type"]
+                ):
                     # instance_id is not to be considered as item property
                     continue
                 payload = self._extract_properties(
@@ -1094,33 +1084,24 @@ class DarwinAPI(foua.AnnotationAPI):
                 if not properties_check:
                     url = f"{base_url}/{team_slug}/properties"
                     payload["dataset_ids"] = [dataset_id]
-                    response = requests.post(url, json=payload, headers=headers)
-                    if not response.ok:
-                        raise requests.exceptions.HTTPError(
-                            f"POST request failed with status code {response.status_code}."
-                        )
+                    DarwinAPIWrapper.post(url, payload=payload, headers=headers)
                     continue
                 else:
                     current_property_values = [
                         val["value"] for val in properties_check[0]["property_values"]
                     ]
-                    payload_property_values = [
-                        val["value"] for val in payload["property_values"]
-                    ]
-                    if any(
-                        val not in current_property_values
-                        for val in payload_property_values
-                    ):
+                    missing_property_values = []
+                    for val in payload["property_values"]:
+                        if val["value"] not in current_property_values:
+                            missing_property_values.append(val)
+                    if missing_property_values:
+                        payload["property_values"] = missing_property_values
                         prop_id = self._get_property_id(
                             properties_check, item_property_name
                         )
                         url = f"{base_url}/{team_slug}/properties/{prop_id}"
                         del payload["granularity"]
-                        response = requests.put(url, json=payload, headers=headers)
-                        if not response.ok:
-                            raise requests.exceptions.HTTPError(
-                                f"PUT request failed with status code {response.status_code}."
-                            )
+                        DarwinAPIWrapper.put(url, payload=payload, headers=headers)
                     # If needed, assign the item property to the dataset
                     if dataset_id not in properties_check[0]["dataset_ids"]:
                         prop_id = self._get_property_id(
@@ -1139,18 +1120,14 @@ class DarwinAPI(foua.AnnotationAPI):
                             if dataset_id in current_dataset_ids
                         ]
                         url = f"{base_url}/{team_slug}/properties/{prop_id}"
-                        response = requests.put(
+                        DarwinAPIWrapper.put(
                             url,
-                            json={
+                            payload={
                                 "dataset_ids": dataset_ids,
                                 "name": item_property_name,
                             },
                             headers=headers,
                         )
-                        if not response.ok:
-                            raise requests.exceptions.HTTPError(
-                                f"PUT request failed with status code {response.status_code}."
-                            )
 
     def _check_item_properties(self, backend, team_slug, item_property_name):
         """
@@ -1159,7 +1136,7 @@ class DarwinAPI(foua.AnnotationAPI):
         base_url = backend.config.base_url
         url = f"{base_url}/{team_slug}/properties?include_values=true"
         headers = self._get_headers()
-        response = requests.get(url, headers=headers)
+        response = DarwinAPIWrapper.get(url, headers=headers)
         item_properties = json.loads(response.text)["properties"]
         for prop in item_properties:
             if prop["name"] == item_property_name:
@@ -1186,7 +1163,7 @@ class DarwinAPI(foua.AnnotationAPI):
         base_url = backend.config.base_url
         url = f"{base_url}/{team_slug}/properties?annotation_class_ids[]={class_id}&include_values=true"
         headers = self._get_headers()
-        response = requests.get(url, headers=headers)
+        response = DarwinAPIWrapper.get(url, headers=headers)
         properties = json.loads(response.text)["properties"]
         for prop in properties:
             if prop["name"] == prop_name:
@@ -1797,58 +1774,38 @@ class DarwinAPI(foua.AnnotationAPI):
     def _get_workflows(self, team_slug, base_url):
         url = self._get_workflows_url(team_slug, base_url)
         headers = self._get_headers()
-        response = requests.get(url, headers=headers)
-        if response.ok:
-            return json.loads(response.text)
-        else:
-            raise requests.exceptions.HTTPError(
-                f"GET request failed with status code {response.status_code}."
-            )
+        response = DarwinAPIWrapper.get(url, headers=headers)
+        return json.loads(response.text)
 
     def _detach_workflow(self, team_slug, workflow, base_url):
         url = self._get_workflows_url(team_slug, base_url)
         headers = self._get_headers()
         workflow_id = workflow["id"]
         url = f"{url}/{workflow_id}/unlink_dataset"
-        response = requests.patch(url, headers=headers)
         logging.info("Unlinking workflow {workflow_id}")
-        if response.ok:
-            logging.info(f"Workflow {workflow_id} unlinked")
-            return response.json()
-        else:
-            raise requests.exceptions.HTTPError(
-                f"PATCH request failed with status code {response.status_code}."
-            )
+        response = DarwinAPIWrapper.patch(url, headers=headers)
+        logging.info(f"Workflow {workflow_id} unlinked")
+        return response.json()
 
     def _get_datasets(self, backend, team_slug):
         url = "/".join(backend.config.base_url.split("/")[0:4]) + "/datasets"
         headers = self._get_headers()
-        response = requests.get(url, headers=headers)
+        response = DarwinAPIWrapper.get(url, headers=headers)
         return json.loads(response.text)
 
     def _delete_dataset_id(self, dataset_id, base_url):
         url = f"{base_url}/datasets/{dataset_id}/archive"
         headers = self._get_headers()
-        response = requests.put(url, headers=headers)
-        if response.ok:
-            logging.info(f"Dataset {dataset_id} deleted")
-            return response.json()
-        else:
-            raise requests.exceptions.HTTPError(
-                f"PUT request failed with status code {response.status_code}."
-            )
+        response = DarwinAPIWrapper.put(url, {}, headers=headers)
+        logging.info(f"Dataset {dataset_id} deleted")
+        return response.json()
 
     def _delete_workflow_id(self, team_slug, workflow_id, base_url):
         url = f"{base_url}/{team_slug}/workflows/{workflow_id}"
         headers = self._get_headers()
-        response = requests.delete(url, headers=headers)
-        if response.ok:
-            logging.info(f"Workflow {workflow_id} deleted")
-            return response.json()
-        else:
-            raise requests.exceptions.HTTPError(
-                f"DELETE request failed with status code {response.status_code}."
-            )
+        response = DarwinAPIWrapper.delete(url, headers=headers)
+        logging.info(f"Workflow {workflow_id} deleted")
+        return response.json()
 
     def _delete_dataset_with_workflow_detach(self, dataset_slug, client):
         dataset = self._client.get_remote_dataset(dataset_slug)
@@ -1945,7 +1902,7 @@ class DarwinResults(foua.AnnotationResults):
         client = self.connect_to_api().client
         dataset = client.get_remote_dataset(self.backend.config.dataset_slug)
         url = f"{client.base_url}/api/v2/teams/{dataset.team}/items/status_counts?dataset_ids[]={dataset.dataset_id}"
-        response = requests.get(url, headers=self._get_headers())
+        response = DarwinAPIWrapper.get(url, headers=self._get_headers())
 
         response.raise_for_status()
 
@@ -1974,6 +1931,53 @@ class DarwinResults(foua.AnnotationResults):
             dataset_slug=d.get("dataset_slug"),
             frame_id_map=d.get("frame_id_map"),
         )
+
+
+class DarwinAPIException(Exception):
+    pass
+
+
+class DarwinAPIWrapper:
+    @classmethod
+    def get(cls, url: str, headers: dict):
+        response = requests.get(url, headers=headers)
+        cls._validate_response(url, "GET", response)
+        return response
+
+    @classmethod
+    def patch(cls, url: str, headers: dict):
+        response = requests.patch(url, headers=headers)
+        cls._validate_response(url, "PATCH", response)
+        return response
+
+    @classmethod
+    def post(cls, url: str, payload: dict, headers: dict):
+        response = requests.post(url, json=payload, headers=headers)
+        cls._validate_response(url, "POST", response)
+        return response
+
+    @classmethod
+    def put(cls, url: str, payload: dict, headers: dict):
+        response = requests.put(url, json=payload, headers=headers)
+        cls._validate_response(url, "PUT", response)
+        return response
+
+    @classmethod
+    def delete(cls, url: str, headers: dict):
+        response = requests.delete(url, headers=headers)
+        cls._validate_response(url, "DELETE", response)
+        return response
+
+    @classmethod
+    def _validate_response(cls, url, method, response: requests.Response):
+        if not response.ok:
+            try:
+                error_details = response.json()
+                logging.error(f"{method} '{url}' error: {error_details}")
+                raise DarwinAPIException(f"{method} '{url}' error: {error_details}")
+            except requests.exceptions.JSONDecodeError:
+                pass
+        response.raise_for_status()
 
 
 # Registering External Storage Items
@@ -2026,10 +2030,10 @@ def _register_items(
             chunked_payload["items"] = chunk
             backoff = 1
             while True:
-                response = requests.post(
+                response = DarwinAPIWrapper.post(
                     f"{base_url}/{team_slug}/items/register_existing",
+                    payload=chunked_payload,
                     headers=headers,
-                    json=chunked_payload,
                 )
 
                 if response.ok:
@@ -2111,10 +2115,10 @@ def _multislot_registration(
             chunked_payload["items"] = chunk
             backoff = 1
             while True:
-                response = requests.post(
+                response = DarwinAPIWrapper.post(
                     f"{base_url}/{team_slug}/items/register_existing",
+                    payload=chunked_payload,
                     headers=headers,
-                    json=chunked_payload,
                 )
 
                 if response.ok:
@@ -2177,13 +2181,13 @@ def _upload_multislot_items(groups, api_key, dataset_slug, team_slug, base_url):
             "dataset_slug": dataset_slug,
         }
 
-        response = requests.post(
+        response = DarwinAPIWrapper.post(
             f"{base_url}/{team_slug}/items/direct_upload",
+            payload=payload,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"ApiKey {api_key}",
             },
-            json=payload,
         )
 
         if response.ok:
@@ -2258,19 +2262,14 @@ def _list_items(api_key, dataset_id, team_slug, base_url):
     items = []
 
     while url:
-        response = requests.get(url, headers=headers)
-        if response.ok:
-            data = json.loads(response.text)
-            items.extend(data["items"])
-            next_page = data.get("page", {}).get("next")
-            if next_page:
-                url = f"{base_url}/{team_slug}/items?dataset_ids={dataset_id}&page[from]={next_page}"
-            else:
-                url = None
+        response = DarwinAPIWrapper.get(url, headers=headers)
+        data = json.loads(response.text)
+        items.extend(data["items"])
+        next_page = data.get("page", {}).get("next")
+        if next_page:
+            url = f"{base_url}/{team_slug}/items?dataset_ids={dataset_id}&page[from]={next_page}"
         else:
-            raise requests.exceptions.HTTPError(
-                f"GET request failed with status code {response.status_code}, {response.text}."
-            )
+            url = None
 
     return items
 
