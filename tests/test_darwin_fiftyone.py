@@ -9,6 +9,8 @@ Runs against the IRL Darwin production environment.
 """
 from dotenv import load_dotenv
 
+from darwin_fiftyone.darwin import DarwinAPIWrapper
+
 # Load environment variables from .env file at the start
 load_dotenv(override=True)
 
@@ -174,6 +176,19 @@ def get_dataset_id_from_slug(dataset_slug):
         if dataset["slug"] == dataset_slug:
             return dataset["id"]
     raise ValueError(f"Dataset with slug {dataset_slug} not found")
+
+
+def get_team_property_values() -> dict[str, set[str]]:
+    url = f"https://darwin.irl.v7labs.com/api/v2/teams/{team_slug}/properties?include_values=true"
+    headers = {"accept": "application/json", "Authorization": f"ApiKey {api_key}"}
+    response = DarwinAPIWrapper.get(url, headers=headers)
+    prop_values = {}
+    for prop in response.json()["properties"]:
+        prop_values[prop["name"]] = {
+            val["value"]
+            for val in prop["property_values"]
+        }
+    return prop_values
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -744,6 +759,71 @@ def test_annotate_full_label_schema(setup_quickstart):
     )
 
 
+def test_annotate_full_label_schema_update(setup_quickstart):
+    """Tests update of imported properties"""
+
+    anno_key = "full_label_schema_update"
+    dsn = "fo-v7-test-full-label-schema-update"
+    if fo.dataset_exists(dsn):
+        fo.delete_dataset(dsn)
+
+    dataset = foz.load_zoo_dataset("quickstart", max_samples=2, dataset_name=dsn)
+    dataset.delete_sample_fields(["predictions"])
+
+    def get_label_schema(values):
+        return {
+            "ground_truth": {
+                "type": "detections",
+                "classes": [
+                    {
+                        "classes": ["class1", "class2"],
+                        "attributes": {
+                            "single_select_section_level": {
+                                "type": "single_select",
+                                "granularity": "section",
+                                "values": values,
+                            },
+                        },
+                    },
+                ],
+                "attributes": {
+                    "single_select_item_level": {
+                        "type": "single_select",
+                        "granularity": "item",
+                        "values": values,
+                    },
+                },
+            },
+        }
+
+    values = ["val1", "val2"]
+
+    dataset.annotate(
+        anno_key,
+        label_schema=get_label_schema(values),
+        backend="darwin",
+        base_url="https://darwin.irl.v7labs.com/api/v2/teams",
+    )
+    dataset.delete_annotation_run(anno_key)
+
+    prop_values = get_team_property_values()
+    assert prop_values["single_select_section_level"] == set(values)
+    assert prop_values["single_select_item_level"] == set(values)
+
+    values.append("val3")
+
+    dataset.annotate(
+        anno_key,
+        label_schema=get_label_schema(values),
+        backend="darwin",
+        base_url="https://darwin.irl.v7labs.com/api/v2/teams",
+    )
+
+    prop_values = get_team_property_values()
+    assert prop_values["single_select_section_level"] == set(values)
+    assert prop_values["single_select_item_level"] == set(values)
+
+
 def test_load_full_label_schema():
     """See test_annotate_external_media"""
 
@@ -767,6 +847,22 @@ def list_classes():
 
 def delete_class(class_id):
     url = f"https://darwin.irl.v7labs.com/api/annotation_classes/{class_id}"
+    headers = {"accept": "application/json", "Authorization": f"ApiKey {api_key}"}
+    response = requests.delete(url, headers=headers)
+    response.raise_for_status()
+    print(response.text)
+
+
+def list_properties():
+    url = f"https://darwin.irl.v7labs.com/api/v2/teams/{team_slug}/properties"
+    headers = {"accept": "application/json", "Authorization": f"ApiKey {api_key}"}
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json()
+
+
+def delete_property(property_id):
+    url = f"https://darwin.irl.v7labs.com/api/v2/teams/{team_slug}/properties/{property_id}"
     headers = {"accept": "application/json", "Authorization": f"ApiKey {api_key}"}
     response = requests.delete(url, headers=headers)
     response.raise_for_status()
@@ -876,3 +972,7 @@ def test_cleanup_all(mocker):
         if c["name"] == "__raster_layer__":
             continue
         delete_class(c["id"])
+
+    props = list_properties()["properties"]
+    for prop in props:
+        delete_property(prop["id"])
