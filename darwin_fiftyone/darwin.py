@@ -1050,8 +1050,8 @@ class DarwinAPI(foua.AnnotationAPI):
                         prop_id = self._get_property_id(properties_check, prop)
                         url = f"{base_url}/{team_slug}/properties/{prop_id}"
                         del payload["granularity"]
-                        if 'annotation_class_id' in payload:
-                            del payload['annotation_class_id']
+                        if "annotation_class_id" in payload:
+                            del payload["annotation_class_id"]
                         DarwinAPIWrapper.put(url, payload=payload, headers=headers)
 
     def _create_item_properties(
