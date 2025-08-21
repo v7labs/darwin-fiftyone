@@ -441,6 +441,40 @@ def test_annotate_schema(setup_quickstart):
     )
 
 
+def test_schema_supports_different_level_attributes_with_same_name(setup_quickstart_empty):
+    dataset = setup_quickstart_empty
+
+    label_schema = {
+        "new_classifications": {
+            "type": "classifications",
+            "classes": [
+                {
+                    "classes": ["dog"],
+                    "attributes": {
+                        "same_attribute_name": {
+                            "type": "single_select",
+                            "values": ["inside_cart", "outside_cart"],
+                        },
+                    },
+                }
+            ],
+            "attributes": {
+                "same_attribute_name": {"type": "text"},
+            },
+        }
+    }
+
+    anno_key = "schema_with_same_name_attributes"
+    v7_dataset_slug = f"{dataset.name}-{anno_key}"
+    dataset.annotate(
+        anno_key,
+        label_schema=label_schema,
+        backend="darwin",
+        dataset_slug=v7_dataset_slug,
+        base_url="https://darwin.irl.v7labs.com/api/v2/teams",
+    )
+
+
 def test_load_schema():
     """See"""
 

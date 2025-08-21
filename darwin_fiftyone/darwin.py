@@ -1139,7 +1139,10 @@ class DarwinAPI(foua.AnnotationAPI):
         response = DarwinAPIWrapper.get(url, headers=headers)
         item_properties = json.loads(response.text)["properties"]
         for prop in item_properties:
-            if prop["name"] == item_property_name:
+            if (
+                prop["name"] == item_property_name
+                and not prop["annotation_class_id"]
+            ):
                 return [prop]
         return []
 
