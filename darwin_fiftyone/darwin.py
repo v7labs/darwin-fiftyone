@@ -1872,16 +1872,8 @@ def _register_items(
 ):
     """
     Registers external storage items in Darwin
-
-    Only readwrite currently supported
     """
     logging.info("item registration started")
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"ApiKey {api_key}",
-    }
 
     item_list = []
 
@@ -1891,16 +1883,23 @@ def _register_items(
         name = path_list[-1]
         item_list.append(name)
         new_path = "/".join(path_list[3:])
+
+        slot_dict = {
+            "as_frames": "false",
+            "slot_name": "0",
+            "storage_key": new_path,
+            "file_name": name,
+        }
+
+        is_readonly_registration = _is_readonly_registration(sample)
+
+        if is_readonly_registration:
+            payload = _get_readonly_registration_slot(sample)
+            slot_dict.update(payload)
+
         temp_dict = {
             "path": "/",
-            "slots": [
-                {
-                    "as_frames": "false",
-                    "slot_name": "0",
-                    "storage_key": new_path,
-                    "file_name": name,
-                }
-            ],
+            "slots": [slot_dict],
             "name": name,
         }
 
@@ -1911,33 +1910,16 @@ def _register_items(
         }
         logging.info(f"payload: {payload}")
 
-        for chunk in _chunk_list(payload["items"], 10):
-            chunked_payload = payload.copy()
-            chunked_payload["items"] = chunk
-            backoff = 1
-            while True:
-                response = requests.post(
-                    f"{base_url}/{team_slug}/items/register_existing",
-                    headers=headers,
-                    json=chunked_payload,
-                )
+        url = build_registration_api_url(base_url, team_slug, is_readonly_registration)
 
-                if response.ok:
-                    logging.info(f"Item registration complete for {name}")
-                    break
-                elif response.status_code == 429:
-                    logging.warning(
-                        f"Rate limit exceeded. Retrying in {backoff} seconds..."
-                    )
-                    time.sleep(backoff)
-                    backoff = min(
-                        backoff * 2, 300
-                    )  # Exponential backoff with a max delay
-                else:
-                    logging.error(
-                        f"Item {name} registration failed with status code {response.status_code}. Skipping item registration"
-                    )
-                    break
+        _register_items_with_retry(
+            url=url,
+            payload=payload,
+            api_key=api_key,
+            item_identifier=name,
+            success_message=f"Item registration complete for {name}",
+            error_message=f"Item {name} registration failed",
+        )
 
     return item_list
 
@@ -1948,26 +1930,22 @@ def _multislot_registration(
 ):
     """
     Registers external storage items in Darwinin multislots defined by groups
-
-    Only readwrite currently supported
     """
     logging.info("Multi slot item registration started")
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": f"ApiKey {api_key}",
-    }
 
     item_list = []
 
     for k in groups:
         group = groups[k]
+        group_id = group[0]["group"]["id"]
         temp_dict = {
             "path": "/",
             "slots": [],
-            "name": group[0]["group"]["id"],
+            "name": group_id,
         }
+        
+        is_readonly_registration = _is_readonly_registration(group[0])
+
         for sample in group:
             external_path = sample.filepath
             path_list = external_path.split("/")
@@ -1976,14 +1954,18 @@ def _multislot_registration(
             new_path = "/".join(path_list[3:])
             group_id = sample.group.id
             if sample.media_type in ["image", "video"]:
-                temp_dict["slots"].append(
-                    {
-                        "as_frames": "false",
-                        "slot_name": str(sample["group"]["name"]),
-                        "storage_key": new_path,
-                        "file_name": name,
-                    }
-                )
+                slot_dict = {
+                    "as_frames": "false",
+                    "slot_name": str(sample["group"]["name"]),
+                    "storage_key": new_path,
+                    "file_name": name,
+                }
+
+                if is_readonly_registration:
+                    payload = _get_readonly_registration_slot(sample)
+                    slot_dict.update(payload)
+
+                temp_dict["slots"].append(slot_dict)
             else:
                 logging.warning(
                     f"Media type {sample.media_type} not supported for multi slot item registration. Skipping item registration"
@@ -1996,33 +1978,16 @@ def _multislot_registration(
         }
         logging.info(f"payload: {payload}")
 
-        for chunk in _chunk_list(payload["items"], 10):
-            chunked_payload = payload.copy()
-            chunked_payload["items"] = chunk
-            backoff = 1
-            while True:
-                response = requests.post(
-                    f"{base_url}/{team_slug}/items/register_existing",
-                    headers=headers,
-                    json=chunked_payload,
-                )
+        url = build_registration_api_url(base_url, team_slug, is_readonly_registration)
 
-                if response.ok:
-                    logging.info(f"Multi slot item registration complete for {name}")
-                    break
-                elif response.status_code == 429:
-                    logging.warning(
-                        f"Rate limit exceeded. Retrying in {backoff} seconds..."
-                    )
-                    time.sleep(backoff)
-                    backoff = min(
-                        backoff * 2, 300
-                    )  # Exponential backoff with a max delay
-                else:
-                    logging.error(
-                        f"Multi slot item with id {group_id} registration failed with status code {response.status_code}. Skipping item registration"
-                    )
-                    break
+        _register_items_with_retry(
+            url=url,
+            payload=payload,
+            api_key=api_key,
+            item_identifier=group_id,
+            success_message=f"Multi slot item registration complete for group {group_id}",
+            error_message=f"Multi slot item with id {group_id} registration failed",
+        )
 
     return item_list
 
@@ -2288,6 +2253,85 @@ def _chunk_list(lst, chunk_size):
     for i in range(0, len(lst), chunk_size):
         yield lst[i : i + chunk_size]
 
+
+def _register_items_with_retry(
+    url, payload, api_key, item_identifier, success_message, error_message
+):
+    """
+    Helper function to register items with retry logic and exponential backoff.
+    
+    Parameters
+    ----------
+    url : str
+        The API endpoint URL to post to
+    payload : dict
+        The payload containing items to register
+    api_key : str
+        API key for the request
+    item_identifier : str
+        Identifier for logging (e.g., item name or group ID)
+    success_message : str
+        Message to log on successful registration
+    error_message : str
+        Message to log on registration failure
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"ApiKey {api_key}",
+    }
+
+    for chunk in _chunk_list(payload["items"], 10):
+        chunked_payload = payload.copy()
+        chunked_payload["items"] = chunk
+        backoff = 1
+        while True:
+            response = requests.post(url, json=chunked_payload, headers=headers)
+
+            if response.ok:
+                logging.info(success_message)
+                break
+            elif response.status_code == 429:
+                logging.warning(
+                    f"Rate limit exceeded. Retrying in {backoff} seconds..."
+                )
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 300)  # Exponential backoff with a max delay
+            else:
+                logging.error(
+                    f"{error_message} with status code {response.status_code}. Skipping item registration"
+                )
+                break
+
+def _is_readonly_registration(sample):
+    """
+    Check if the sample is readonly registration
+    """
+    if sample.has_field("darwin_metadata") and sample.darwin_metadata:
+        return sample.darwin_metadata.get("readonly_registration_payload") is not None
+    return False
+
+def _get_readonly_registration_slot(sample):
+    """
+    Get the readonly registration payload from the registration payload
+    """
+    registration_payload = sample.darwin_metadata["readonly_registration_payload"]
+    # Exclude fields computed separately
+    exclude_fields = {"name", "path", "storage_key"}
+    payload = {k: v for k, v in registration_payload.items() if k not in exclude_fields}
+    
+    # Rename the total_size_bytes key because it is different for slots
+    if "total_size_bytes" in payload:
+        payload["size_bytes"] = payload.pop("total_size_bytes")
+
+    return payload
+
+def build_registration_api_url(base_url, team_slug, is_readonly_registration):
+    """
+    Build the registration API URL
+    """
+    action = "register_existing_readonly" if is_readonly_registration else "register_existing"
+    return f"{base_url}/{team_slug}/items/{action}"
 
 def wait_until_items_finished_processing(dataset_id, team_slug, api_key, base_url):
     """
