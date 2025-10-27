@@ -1016,8 +1016,15 @@ class DarwinAPI(foua.AnnotationAPI):
                     if response.ok:
                         return "Success"
                     else:
+                        logging.error(
+                            f"POST request failed with status code {response.status_code}\n"
+                            f"Request URL: {url}\n"
+                            f"Request payload: {json.dumps(payload, indent=2)}\n"
+                            f"Response: {response.text}"
+                        )
                         raise requests.exceptions.HTTPError(
-                            f"POST request failed with status code {response.status_code}."
+                            f"POST request failed with status code {response.status_code}. "
+                            f"Response: {response.text}"
                         )
 
                 else:
@@ -1031,8 +1038,15 @@ class DarwinAPI(foua.AnnotationAPI):
                             f"Property {prop} already exists in class {cls} with the same values"
                         )
                     else:
+                        logging.error(
+                            f"PUT request failed with status code {response.status_code}\n"
+                            f"Request URL: {url}\n"
+                            f"Request payload: {json.dumps(payload, indent=2)}\n"
+                            f"Response: {response.text}"
+                        )
                         raise requests.exceptions.HTTPError(
-                            f"PUT request failed with status code {response.status_code}."
+                            f"PUT request failed with status code {response.status_code}. "
+                            f"Response: {response.text}"
                         )
 
     def _check_properties(self, backend, team_slug, class_id):
@@ -1724,8 +1738,15 @@ class DarwinAPI(foua.AnnotationAPI):
             logging.info(f"Dataset {dataset_id} deleted")
             return response.json()
         else:
+            logging.error(
+                f"PUT request failed with status code {response.status_code}\n"
+                f"Request URL: {url}\n"
+                f"Dataset ID: {dataset_id}\n"
+                f"Response: {response.text}"
+            )
             raise requests.exceptions.HTTPError(
-                f"PUT request failed with status code {response.status_code}."
+                f"PUT request failed with status code {response.status_code}. "
+                f"Response: {response.text}"
             )
 
     def _delete_workflow_id(self, team_slug, workflow_id, base_url):
