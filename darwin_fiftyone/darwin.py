@@ -671,10 +671,10 @@ class DarwinAPI(foua.AnnotationAPI):
                 darwin_annotations = []
 
                 if is_video:
-                    frame_id_map[str(sample.id)] = {}
+                    frame_id_map[sample.id] = {}
 
                     for frame_number, frame in sample.frames.items():
-                        frame_id_map[str(sample.id)][str(frame_number)] = str(frame.id)
+                        frame_id_map[sample.id][str(frame_number)] = frame.id
 
                         annotations = self._convert_image_annotations_to_v7(
                             sample,

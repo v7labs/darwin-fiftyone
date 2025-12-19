@@ -441,3 +441,68 @@ def test_upload_annotations_no_duplicate_import_when_multiple_fields():
     assert id_map["dets"][sample_id] == ["c1", "c2"]
 
 
+def test_upload_annotations_video_frame_id_map_preserves_id_types():
+    """Ensure `frame_id_map` uses the same sample_id type as `item_sample_map` emits.
+
+    In the real integration, `item_sample_map` stores raw `sample.id` values, and
+    `download_annotations()` later indexes `frame_id_map[sample_id]`. So we must
+    not stringify `sample.id` or `frame.id` in `frame_id_map`.
+    """
+    import_calls = []
+    mod = _import_darwin_module(import_calls)
+
+    api = mod.DarwinAPI.__new__(mod.DarwinAPI)
+
+    # We don't need to generate actual annotations for this test
+    api._convert_image_annotations_to_v7 = lambda *args, **kwargs: []
+
+    backend = types.SimpleNamespace(config=types.SimpleNamespace(Groups=False))
+
+    class SampleId:
+        def __init__(self, v):
+            self.v = v
+
+        def __repr__(self):
+            return f"SampleId({self.v})"
+
+        def __str__(self):
+            return f"SID:{self.v}"
+
+    class FrameId:
+        def __init__(self, v):
+            self.v = v
+
+        def __repr__(self):
+            return f"FrameId({self.v})"
+
+        def __str__(self):
+            return f"FID:{self.v}"
+
+    sample_id_obj = SampleId("abc")
+    frame1_id_obj = FrameId("f1")
+
+    sample = _FakeSample(
+        _id=sample_id_obj,
+        media_type=mod.fomm.VIDEO,
+        filepath="/tmp/a.mp4",
+        frames={
+            1: _FakeFrame(frame1_id_obj, {"dets": _FakeLabelContainer({"detections": []}), "cls": None}),
+        },
+    )
+
+    label_schema = {"frames.cls": {"type": "classification", "classes": ["a"]}}
+
+    _, frame_id_map = api._upload_annotations(
+        label_schema=label_schema,
+        samples=[sample],
+        media_field="filepath",
+        dataset=object(),
+        backend=backend,
+    )
+
+    assert sample_id_obj in frame_id_map
+    assert str(sample_id_obj) not in frame_id_map
+    assert frame_id_map[sample_id_obj]["1"] is frame1_id_obj
+    assert str(frame_id_map[sample_id_obj]["1"]) == str(frame1_id_obj)
+
+
