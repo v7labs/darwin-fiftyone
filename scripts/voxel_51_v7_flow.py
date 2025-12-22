@@ -40,6 +40,7 @@ import traceback
 from pathlib import Path
 from pprint import pprint
 import re
+from urllib.parse import urlparse, urlunparse
 
 import faulthandler
 
@@ -52,11 +53,6 @@ if str(REPO_ROOT) not in sys.path:
 
 import fiftyone as fo
 import fiftyone.zoo as foz
-
-try:
-    import requests
-except Exception:  # pragma: no cover
-    requests = None
 
 
 DEFAULT_TEAM_API_URL = "http://localhost:4000/api/v2/teams"
@@ -99,7 +95,8 @@ def ensure_darwin_py_points_at_correct_host(team_api_url: str) -> None:
     # already set, it can silently point darwin-py at the wrong host. Prefer
     # consistency with the configured team API URL.
     if current and current.rstrip("/") != derived.rstrip("/"):
-        print(f"Overriding DARWIN_BASE_URL: {current} -> {derived}")
+        # Avoid printing full URLs in non-verbose mode; caller will handle verbosity
+        ...
     os.environ["DARWIN_BASE_URL"] = derived
 
 
@@ -113,6 +110,37 @@ def get_api_key_and_base_url(args: argparse.Namespace) -> tuple[str, str]:
             "backends.darwin.api_key in ~/.fiftyone/annotation_config.json"
         )
     return api_key, base_url
+
+
+def _safe_url(url: str) -> str:
+    """Returns scheme://netloc for a URL (no path/query), or the original if parsing fails."""
+    try:
+        p = urlparse(url)
+        if p.scheme and p.netloc:
+            return urlunparse((p.scheme, p.netloc, "", "", "", ""))
+    except Exception:
+        ...
+    return url
+
+
+def _redact_text(text: str) -> str:
+    """
+    Redact common sensitive data from logs:
+    - presigned URL querystrings (e.g. X-Amz-Signature=...)
+    - raw ApiKey headers in error messages
+    """
+    if not text:
+        return text
+
+    # Remove common presigned URL params
+    text = re.sub(r"(X-Amz-Signature=)[^&\\s]+", r"\\1<redacted>", text)
+    text = re.sub(r"(X-Amz-Credential=)[^&\\s]+", r"\\1<redacted>", text)
+    text = re.sub(r"(X-Amz-Security-Token=)[^&\\s]+", r"\\1<redacted>", text)
+
+    # Redact ApiKey tokens
+    text = re.sub(r"(Authorization:\\s*ApiKey)\\s+[^\\s]+", r"\\1 <redacted>", text, flags=re.IGNORECASE)
+    text = re.sub(r"(ApiKey)\\s+[^\\s]+", r"\\1 <redacted>", text, flags=re.IGNORECASE)
+    return text
 
 
 def load_or_create_dataset(dataset_name: str, zoo: str | None, max_samples: int) -> fo.Dataset:
@@ -149,6 +177,11 @@ def parse_args() -> argparse.Namespace:
     common.add_argument("--dataset-slug", required=True, help="Darwin dataset slug (remote)")
     common.add_argument("--api-key", default="", help="Override Darwin API key (otherwise uses annotation_config.json)")
     common.add_argument("--base-url", default="", help="Override Darwin team API url (e.g. http://localhost:4000/api/v2/teams)")
+    common.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose debug output (may include sensitive URLs/paths).",
+    )
 
     start = sub.add_parser("start", parents=[common], help="Start a Darwin annotation run and optionally open the editor")
     start.add_argument("--zoo", default="", help="Optional zoo dataset name used to create the local dataset if missing")
@@ -184,21 +217,28 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     api_key, base_url = get_api_key_and_base_url(args)
+    prev_darwin_base = os.environ.get("DARWIN_BASE_URL")
     ensure_darwin_py_points_at_correct_host(base_url)
+    if args.verbose and prev_darwin_base and prev_darwin_base.rstrip("/") != os.environ.get("DARWIN_BASE_URL", "").rstrip("/"):
+        print(f"Overriding DARWIN_BASE_URL: {prev_darwin_base} -> {os.environ.get('DARWIN_BASE_URL')}")
 
     print("Python:", sys.version)
-    print("Python executable:", sys.executable)
+    if args.verbose:
+        print("Python executable:", sys.executable)
     print("FiftyOne:", getattr(fo, "__version__", "<unknown>"))
     print("dataset_name:", args.dataset_name)
     print("darwin dataset_slug:", args.dataset_slug)
-    print("darwin base_url:", base_url)
-    print("DARWIN_BASE_URL env:", os.environ.get("DARWIN_BASE_URL"))
-    try:
+    # Avoid printing full URLs/env by default
+    print("darwin host:", _safe_url(base_url))
+    if args.verbose:
+        print("darwin base_url (full):", base_url)
+        print("DARWIN_BASE_URL env:", os.environ.get("DARWIN_BASE_URL"))
         print("FIFTYONE_CONFIG_PATH env:", os.environ.get("FIFTYONE_CONFIG_PATH"))
         print("FIFTYONE_DATABASE_URI env:", os.environ.get("FIFTYONE_DATABASE_URI"))
-        print("FiftyOne config.database_uri:", fo.config.database_uri)
-    except Exception:
-        pass
+        try:
+            print("FiftyOne config.database_uri:", fo.config.database_uri)
+        except Exception:
+            ...
 
     dataset = load_or_create_dataset(
         args.dataset_name,
@@ -206,7 +246,10 @@ def main() -> int:
         max_samples=getattr(args, "max_samples", 10),
     )
     print("\n--- dataset ---")
-    print(dataset)
+    if args.verbose:
+        print(dataset)
+    else:
+        print(f"Name: {dataset.name} | media_type: {dataset.media_type} | samples: {len(dataset)} | persistent: {getattr(dataset, 'persistent', None)}")
     try:
         print("persistent:", dataset.persistent)
     except Exception:
@@ -215,7 +258,13 @@ def main() -> int:
     if args.cmd == "start":
         view = dataset.take(args.view_samples)
         print("\n--- view ---")
-        print(view)
+        if args.verbose:
+            print(view)
+        else:
+            try:
+                print(f"View samples: {view.count()}")
+            except Exception:
+                print("View created")
 
         session = None
         if not args.no_app:
@@ -224,7 +273,8 @@ def main() -> int:
 
         label_schema = build_label_schema(args.label_field, args.label_type, args.classes)
         print("\n--- label_schema ---")
-        pprint(label_schema)
+        # Safe to print ontology/classes; avoid printing large debug structures
+        print({args.label_field: {"type": args.label_type, "classes": label_schema[args.label_field]["classes"]}})
 
         from uuid import uuid4
 
@@ -243,10 +293,15 @@ def main() -> int:
                 launch_editor=args.launch_editor,
             )
             print("annotate() OK")
-            print("results:", results)
+            # Avoid printing item maps / ids by default
+            if args.verbose:
+                print("results:", results)
         except Exception:
             print("annotate() FAILED")
-            traceback.print_exc()
+            if args.verbose:
+                traceback.print_exc()
+            else:
+                print(_redact_text(traceback.format_exc()))
             return 2
 
         print("\nNext:")
@@ -283,7 +338,7 @@ def main() -> int:
             # with virtual-hosted-style bucket domains like:
             #   http://<bucket>.s3.<region>.localhost:4566/...
             # which requires DNS/hosts to resolve that subdomain to 127.0.0.1.
-            msg = str(e)
+            msg = _redact_text(str(e))
             if "Failed to resolve" in msg and ".localhost" in msg:
                 # Try to extract the failing hostname from urllib3/requests errors
                 host = None
@@ -302,7 +357,10 @@ def main() -> int:
                 print("  (or configure DNS so `*.localhost` resolves to 127.0.0.1)")
                 print("- Ensure localstack/minio is running and reachable on port 4566")
                 print("\nOriginal error:")
-            traceback.print_exc()
+            if args.verbose:
+                traceback.print_exc()
+            else:
+                print(_redact_text(traceback.format_exc()))
             return 3
         return 0
 
