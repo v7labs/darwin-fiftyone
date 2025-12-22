@@ -1022,25 +1022,7 @@ class DarwinAPI(foua.AnnotationAPI):
                     backend, team_slug, cls_id, prop
                 )
                 if not properties_check:
-<<<<<<< HEAD
                     DarwinAPIWrapper.post(url, payload=payload, headers=headers)
-=======
-                    response = requests.post(url, json=payload, headers=headers)
-                    if response.ok:
-                        return "Success"
-                    else:
-                        logging.error(
-                            f"POST request failed with status code {response.status_code}\n"
-                            f"Request URL: {url}\n"
-                            f"Request payload: {json.dumps(payload, indent=2)}\n"
-                            f"Response: {response.text}"
-                        )
-                        raise requests.exceptions.HTTPError(
-                            f"POST request failed with status code {response.status_code}. "
-                            f"Response: {response.text}"
-                        )
-
->>>>>>> 3f9b8f3 (Pin darwin-py version to 1.0.8 and add more logging)
                 else:
                     current_property_values = [
                         val["value"] for val in properties_check[0]["property_values"]
@@ -1103,7 +1085,6 @@ class DarwinAPI(foua.AnnotationAPI):
                         prop_id = self._get_property_id(
                             properties_check, item_property_name
                         )
-<<<<<<< HEAD
                         url = f"{base_url}/{team_slug}/properties/{prop_id}"
                         del payload["granularity"]
                         DarwinAPIWrapper.put(url, payload=payload, headers=headers)
@@ -1132,18 +1113,6 @@ class DarwinAPI(foua.AnnotationAPI):
                                 "name": item_property_name,
                             },
                             headers=headers,
-=======
-                    else:
-                        logging.error(
-                            f"PUT request failed with status code {response.status_code}\n"
-                            f"Request URL: {url}\n"
-                            f"Request payload: {json.dumps(payload, indent=2)}\n"
-                            f"Response: {response.text}"
-                        )
-                        raise requests.exceptions.HTTPError(
-                            f"PUT request failed with status code {response.status_code}. "
-                            f"Response: {response.text}"
->>>>>>> 3f9b8f3 (Pin darwin-py version to 1.0.8 and add more logging)
                         )
 
     def _check_item_properties(self, backend, team_slug, item_property_name):
@@ -1816,27 +1785,9 @@ class DarwinAPI(foua.AnnotationAPI):
     def _delete_dataset_id(self, dataset_id, base_url):
         url = f"{base_url}/datasets/{dataset_id}/archive"
         headers = self._get_headers()
-<<<<<<< HEAD
         response = DarwinAPIWrapper.put(url, {}, headers=headers)
         logging.info(f"Dataset {dataset_id} deleted")
         return response.json()
-=======
-        response = requests.put(url, headers=headers)
-        if response.ok:
-            logging.info(f"Dataset {dataset_id} deleted")
-            return response.json()
-        else:
-            logging.error(
-                f"PUT request failed with status code {response.status_code}\n"
-                f"Request URL: {url}\n"
-                f"Dataset ID: {dataset_id}\n"
-                f"Response: {response.text}"
-            )
-            raise requests.exceptions.HTTPError(
-                f"PUT request failed with status code {response.status_code}. "
-                f"Response: {response.text}"
-            )
->>>>>>> 3f9b8f3 (Pin darwin-py version to 1.0.8 and add more logging)
 
     def _delete_workflow_id(self, team_slug, workflow_id, base_url):
         url = f"{base_url}/{team_slug}/workflows/{workflow_id}"
