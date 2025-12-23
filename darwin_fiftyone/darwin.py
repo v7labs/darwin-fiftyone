@@ -12,6 +12,7 @@ import zipfile
 from pathlib import Path
 import contextlib
 import os
+from typing import Dict, List, Optional, Union
 
 import darwin
 import darwin.importer as importer
@@ -427,29 +428,43 @@ class DarwinAPI(foua.AnnotationAPI):
         sample,
         frame_size,
         label_schema,
-        id_maps,
+        id_map,
         backend,
         slot_name,
         frame_val=None,
     ):
         """
-        id_maps: fo sample.id -> list-of-fo-labelobj-ids
+        Updates `id_map` in-place to track existing label IDs.
+
+        FiftyOne expects:
+
+        - Images: { "<label-field>": { "<sample-id>": "label-id" or ["label-id", ...], ... }, ... }
+        - Videos: { "<label-field>": { "<sample-id>": { "<frame-id>": "label-id" or ["label-id", ...], ... }, ... }, ... }
         """
 
         darwin_annotations = []
-        for label_field, label_info in label_schema.items():
+        label_source = frame_val if frame_val is not None else sample
+        sample_id = str(sample.id)
+        frame_id = str(frame_val.id) if frame_val is not None else None
+
+        for schema_field, label_info in label_schema.items():
             try:
-                if label_field.startswith("frames"):
-                    label_field = label_field.split(".")[1]
+                fo_field = (
+                    schema_field.split(".")[1]
+                    if schema_field.startswith("frames")
+                    else schema_field
+                )
                 label_type0 = label_info["type"]
                 label_type = _UNIQUE_TYPE_MAP.get(label_type0, label_type0)
                 if label_type0 == "classification":
-                    annotations = [sample[label_field]]
+                    annotations = [label_source[fo_field]]
                 else:
-                    annotations = sample[label_field][label_type]
+                    annotations = label_source[fo_field][label_type]
 
                 logging.info(f"Sample annotations: {annotations}")
                 for annotation in annotations:
+                    if annotation is None:
+                        continue
                     # Adding attributes import support here (depreated attributes field)
                     attributes = getattr(annotation, "attributes", None)
                     if attributes is not None:
@@ -486,16 +501,16 @@ class DarwinAPI(foua.AnnotationAPI):
                         )
                     )
 
-                    if frame_val:
-                        if sample.id not in id_maps:
-                            id_maps[sample.id] = {}
-                            id_maps[sample.id][frame_val.id] = []
-                        id_maps[sample.id][frame_val.id].append(annotation.id)
-
-                    else:
-                        if sample.id not in id_maps:
-                            id_maps[sample.id] = []
-                        id_maps[sample.id].append(annotation.id)
+                    # Record existing label IDs in expected FiftyOne format
+                    label_id = str(annotation.id)
+                    _update_id_map(
+                        id_map,
+                        label_field=schema_field,
+                        sample_id=sample_id,
+                        frame_id=frame_id,
+                        label_id=label_id,
+                        label_type0=label_type0,
+                    )
 
             except Exception as e:
                 logging.error(f"Error converting image annotations to V7: {e}")
@@ -611,7 +626,7 @@ class DarwinAPI(foua.AnnotationAPI):
         Uploads Voxel annotations to Darwin
         """
         # Go through each sample and upload annotations
-        full_id_maps = {}
+        id_map = {}
         frame_id_map = {}
         files_to_import = []
 
@@ -622,142 +637,113 @@ class DarwinAPI(foua.AnnotationAPI):
         ) as import_path:
 
             logging.info(f"import_path: {import_path}")
-            for label_field, label_info in label_schema.items():
-                id_maps = {}
-                for sample in samples:
+            for sample in samples:
+                slot_name = sample["group"]["name"] if backend.config.Groups else "0"
 
-                    slot_name = (
-                        sample["group"]["name"] if backend.config.Groups else "0"
+                logging.info(f"Processing sample: {sample.id}")
+                is_video = sample.media_type == fomm.VIDEO
+
+                if is_video:
+                    assert (
+                        sample.frames
+                    ), "Video samples must have frames. Please use the ensure_frames() method on your dataset or view to ensure that frames are available."
+                    assert all(
+                        lf.startswith("frames") for lf in label_schema.keys()
+                    ), "Video samples must have frame-level labels (e.g. 'frames.detections')"
+
+                # Checks for videos
+                if sample.metadata is None:
+                    if is_video:
+                        sample.metadata = fom.VideoMetadata.build_for(sample[media_field])
+                    else:
+                        sample.metadata = fom.ImageMetadata.build_for(sample[media_field])
+                logging.info(f"Sample metadata: {sample.metadata}")
+
+                if is_video:
+                    frame_size = (
+                        sample.metadata.frame_width,
+                        sample.metadata.frame_height,
                     )
+                else:
+                    frame_size = (sample.metadata.width, sample.metadata.height)
 
-                    logging.info(f"Processing sample: {sample.id}")
-                    is_video = sample.media_type == fomm.VIDEO
+                file_name = Path(sample[media_field]).name
+                darwin_annotations = []
 
-                    if is_video:
-                        assert (
-                            sample.frames
-                        ), "Video samples must have frames. Please use the ensure_frames() method on your dataset or view to ensure that frames are available."
-                        assert label_field.startswith(
-                            "frames"
-                        ), "Video samples must have frame-level labels"
+                if is_video:
+                    frame_id_map[sample.id] = {}
 
-                    # Checks for videos
-                    if sample.metadata is None:
-                        if is_video:
-                            sample.metadata = fom.VideoMetadata.build_for(
-                                sample[media_field]
-                            )
-                        else:
-                            sample.metadata = fom.ImageMetadata.build_for(
-                                sample[media_field]
-                            )
-                    logging.info(f"Sample metadata: {sample.metadata}")
+                    for frame_number, frame in sample.frames.items():
+                        frame_id_map[sample.id][str(frame_number)] = frame.id
 
-                    if is_video:
-                        frame_size = (
-                            sample.metadata.frame_width,
-                            sample.metadata.frame_height,
-                        )
-                    else:
-                        frame_size = (sample.metadata.width, sample.metadata.height)
-
-                    file_name = Path(sample[media_field]).name
-                    darwin_annotations = []
-
-                    if is_video:
-                        frames = {}
-                        frame_id_map[sample.id] = {}
-
-                        for frame_number, frame in sample.frames.items():
-                            frame_id_map[sample.id][str(frame_number)] = frame.id
-
-                            if frame_number not in frames:
-                                frames[frame_number] = []
-
-                            frame_val = frame
-
-                            annotations = self._convert_image_annotations_to_v7(
-                                frame,
-                                frame_size,
-                                label_schema,
-                                id_maps,
-                                backend,
-                                slot_name,
-                                frame_val,
-                            )
-                            logging.info(f"Frame annotations: {annotations}")
-                            for annotation in annotations:
-                                ANNOTATION_DATA_KEYS = [
-                                    "bounding_box",
-                                    "tag",
-                                    "polygon",
-                                    "keypoint",
-                                ]
-                                darwin_frame = {
-                                    k: annotation[k]
-                                    for k in ANNOTATION_DATA_KEYS
-                                    if k in annotation
-                                }
-                                darwin_frame["keyframe"] = True
-
-                                darwin_annotations.append(
-                                    {
-                                        "frames": {str(frame_number - 1): darwin_frame},
-                                        "name": annotation["name"],
-                                        "slot_names": annotation["slot_names"],
-                                        "ranges": [[frame_number - 1, frame_number]],
-                                    }
-                                )
-                    else:
                         annotations = self._convert_image_annotations_to_v7(
                             sample,
                             frame_size,
                             label_schema,
-                            id_maps,
+                            id_map,
                             backend,
                             slot_name,
+                            frame_val=frame,
                         )
-                        darwin_annotations.extend(annotations)
-                    logging.info(f"Sample annotations: {darwin_annotations}")
-                    temp_file_path = Path(import_path) / Path(f"{uuid.uuid4()}.json")
-                    item_name = (
-                        file_name
-                        if not backend.config.Groups
-                        else sample["group"]["id"]
-                    )
-                    with open(temp_file_path, "w") as temp_file:
-                        json.dump(
-                            {
-                                "version": "2.0",
-                                "item": {"name": item_name, "path": ""},
-                                "annotations": darwin_annotations,
-                            },
-                            temp_file,
-                            indent=4,
-                        )
-                    files_to_import.append(temp_file_path)
-                parser = get_importer("darwin")
+                        logging.info(f"Frame annotations: {annotations}")
+                        for annotation in annotations:
+                            ANNOTATION_DATA_KEYS = [
+                                "bounding_box",
+                                "tag",
+                                "polygon",
+                                "keypoint",
+                            ]
+                            darwin_frame = {
+                                k: annotation[k]
+                                for k in ANNOTATION_DATA_KEYS
+                                if k in annotation
+                            }
+                            darwin_frame["keyframe"] = True
 
-                if backend.config.Groups:
-                    importer.import_annotations(
-                        dataset,
-                        parser,
-                        files_to_import,
-                        append=True,
-                        class_prompt=False,
-                    )
+                            darwin_annotations.append(
+                                {
+                                    "frames": {str(frame_number - 1): darwin_frame},
+                                    "name": annotation["name"],
+                                    "slot_names": annotation["slot_names"],
+                                    "ranges": [[frame_number - 1, frame_number]],
+                                }
+                            )
                 else:
-                    importer.import_annotations(
-                        dataset,
-                        parser,
-                        files_to_import,
-                        append=False,
-                        class_prompt=False,
+                    annotations = self._convert_image_annotations_to_v7(
+                        sample,
+                        frame_size,
+                        label_schema,
+                        id_map,
+                        backend,
+                        slot_name,
                     )
+                    darwin_annotations.extend(annotations)
 
-            full_id_maps.update({label_field: id_maps})
+                logging.info(f"Sample annotations: {darwin_annotations}")
+                temp_file_path = Path(import_path) / Path(f"{uuid.uuid4()}.json")
+                item_name = file_name if not backend.config.Groups else sample["group"]["id"]
+                with open(temp_file_path, "w") as temp_file:
+                    json.dump(
+                        {
+                            "version": "2.0",
+                            "item": {"name": item_name, "path": ""},
+                            "annotations": darwin_annotations,
+                        },
+                        temp_file,
+                        indent=4,
+                    )
+                files_to_import.append(temp_file_path)
 
-        return full_id_maps, frame_id_map
+            parser = get_importer("darwin")
+            importer.import_annotations(
+                dataset,
+                parser,
+                files_to_import,
+                append=bool(backend.config.Groups),
+                class_prompt=False,
+            )
+
+        return id_map, frame_id_map
 
     def _create_missing_annotation_classes(
         self, backend, team_slug, label_schema, dataset
@@ -2463,6 +2449,67 @@ def wait_until_items_finished_processing(dataset_id, team_slug, api_key, base_ur
             f"Waiting {sleep_duration} second for items to finish processing..."
         )
         time.sleep(sleep_duration)
+
+
+#
+# `id_map` helpers (private)
+#
+# FiftyOne expects:
+#
+# - Images:
+#   { "<label-field>": { "<sample-id>": "label-id" or ["label-id", ...], ... }, ... }
+#
+# - Videos:
+#   { "<label-field>": { "<sample-id>": { "<frame-id>": "label-id" or ["label-id", ...], ... }, ... }, ... }
+#
+IdMapValue = Union[str, List[str]]
+
+
+def _append_id_map_value(
+    existing: Optional[IdMapValue],
+    label_id: str,
+    *,
+    scalar_allowed: bool,
+) -> IdMapValue:
+    """Appends a label id to a scalar-or-list value, promoting scalars to lists."""
+    if existing is None:
+        return label_id if scalar_allowed else [label_id]
+
+    if isinstance(existing, list):
+        existing.append(label_id)
+        return existing
+
+    # existing is a scalar; promote to list
+    return [existing, label_id]
+
+
+def _update_id_map(
+    id_map: Dict,
+    *,
+    label_field: str,
+    sample_id: str,
+    label_id: str,
+    label_type0: str,
+    frame_id: Optional[str] = None,
+) -> None:
+    """Updates `id_map` in-place in the format expected by FiftyOne."""
+    scalar_allowed = label_type0 == "classification"
+    field_map = id_map.setdefault(label_field, {})
+
+    if frame_id is None:
+        field_map[sample_id] = _append_id_map_value(
+            field_map.get(sample_id),
+            label_id,
+            scalar_allowed=scalar_allowed,
+        )
+        return
+
+    sample_map = field_map.setdefault(sample_id, {})
+    sample_map[frame_id] = _append_id_map_value(
+        sample_map.get(frame_id),
+        label_id,
+        scalar_allowed=scalar_allowed,
+    )
 
 
 _UNIQUE_TYPE_MAP = {
