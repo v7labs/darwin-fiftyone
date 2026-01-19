@@ -2425,7 +2425,27 @@ def _get_readonly_registration_slot(sample):
     if "total_size_bytes" in payload:
         payload["size_bytes"] = payload.pop("total_size_bytes")
 
+    # Ensure media type is aligned with the sample's metadata/media_type
+    desired_type = _infer_registration_type(sample)
+    if payload.get("type") != desired_type:
+        payload["type"] = desired_type
+
     return payload
+
+
+def _infer_registration_type(sample) -> str:
+    """
+    Infer registration type from the sample metadata or media_type.
+    """
+    mime_type = None
+    if getattr(sample, "metadata", None) is not None:
+        mime_type = getattr(sample.metadata, "mime_type", None)
+    if mime_type:
+        if "video" in mime_type:
+            return "video"
+        if "image" in mime_type:
+            return "image"
+    return "video" if sample.media_type == fomm.VIDEO else "image"
 
 def build_registration_api_url(base_url, team_slug, is_readonly_registration):
     """
@@ -2443,7 +2463,27 @@ def wait_until_items_finished_processing(dataset_id, team_slug, api_key, base_ur
         items = _list_items(api_key, dataset_id, team_slug, base_url)
         if not items:
             return
-        if all(item["processing_status"] != "processing" for item in items):
+        processing_items = [
+            item
+            for item in items
+            if item.get("processing_status") == "processing"
+            or item.get("status") == "processing"
+        ]
+        errored_items = [
+            item
+            for item in items
+            if item.get("processing_status") in {"error", "errored", "failed"}
+            or item.get("status") in {"error", "errored", "failed"}
+        ]
+        if errored_items:
+            errored_names = [
+                item.get("name", item.get("id", "unknown")) for item in errored_items
+            ]
+            raise ValueError(
+                "Some items failed to process and cannot receive annotations: "
+                + ", ".join(errored_names)
+            )
+        if not processing_items:
             break
         logging.info(
             f"Waiting {sleep_duration} second for items to finish processing..."
