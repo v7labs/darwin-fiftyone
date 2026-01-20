@@ -1,6 +1,6 @@
 # Core dependencies
 fiftyone>=0.22.0
-darwin-py==1.0.8
+darwin-py>=1.0.8
 pycocotools>=2.0.6
 
 # Data handling
