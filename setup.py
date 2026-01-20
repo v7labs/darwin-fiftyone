@@ -18,7 +18,7 @@ with open(requirements_path) as f:
 
 setup(
     name="darwin-fiftyone",
-    version="2.1.1",
+    version="2.1.2",
     description="Integration between V7 Darwin and Voxel51",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
