@@ -29,6 +29,7 @@ jobs:
         pytest tests/test_darwin_id_map_unit.py -v
 
   integration-test:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     env:
