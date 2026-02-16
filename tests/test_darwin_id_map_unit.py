@@ -391,7 +391,7 @@ def test_upload_annotations_no_duplicate_import_when_multiple_fields():
     api = mod.DarwinAPI.__new__(mod.DarwinAPI)
 
     # Make the conversion deterministic + include the label ID so we can detect duplicates
-    def _to_v7(self, annotation, label_type, frame_size, sample, backend, slot_name="0", attributes=None):
+    def _to_v7(self, annotation, label_type, frame_size, sample, backend, slot_name="0", attributes=None, **kwargs):
         return [{"name": f"id:{annotation.id}", "slot_names": [slot_name], "tag": {}}]
 
     api._convert_image_annotation_to_v7 = types.MethodType(_to_v7, api)
