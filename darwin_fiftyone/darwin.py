@@ -1452,7 +1452,7 @@ class DarwinAPI(foua.AnnotationAPI):
                                 continue
 
                             # Adding confidence score
-                            if confidence:
+                            if confidence is not None:
                                 voxel_annotation.confidence = confidence
 
                             # Adding direct attributes
@@ -1680,7 +1680,7 @@ class DarwinAPI(foua.AnnotationAPI):
                                 continue
 
                             # Adding confidence score
-                            if confidence:
+                            if confidence is not None:
                                 voxel_annotation.confidence = confidence
 
                             # Adding direct attributes
@@ -2185,11 +2185,11 @@ def _v7_basic_annotation(
     if atts:
         annot["attributes"] = atts
 
-    if confidence:
+    if confidence is not None:
         model = {"id": str(uuid.uuid4()), "name": "Voxel51", "type": "external"}
         annot["inference"] = {"confidence": confidence, "model": model}
 
-    if instance_id:
+    if instance_id is not None:
         annot["instance_id"] = {"value": instance_id}
 
     annot["name"] = label
