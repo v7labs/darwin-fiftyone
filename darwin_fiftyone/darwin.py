@@ -461,6 +461,13 @@ class DarwinAPI(foua.AnnotationAPI):
                 else:
                     annotations = label_source[fo_field][label_type]
 
+                # Find the label_schema attribute mapped to instance_id (if any)
+                instance_id_attr = None
+                for attr_name, attr_info in label_info.get("attributes", {}).items():
+                    if attr_info.get("type") == "instance_id":
+                        instance_id_attr = attr_name
+                        break
+
                 logging.info(f"Sample annotations: {annotations}")
                 for annotation in annotations:
                     if annotation is None:
@@ -489,6 +496,17 @@ class DarwinAPI(foua.AnnotationAPI):
 
                     attributes = attribute_list if attribute_list else None
 
+                    # Resolve instance_id: prefer annotation.index (native
+                    # FiftyOne tracking field), fall back to the label_schema-
+                    # mapped attribute (e.g. darwin_instance_id from a prior
+                    # download) so non-tracker models can still provide IDs.
+                    instance_id = getattr(annotation, "index", None)
+                    if instance_id is None and instance_id_attr is not None:
+                        try:
+                            instance_id = annotation[instance_id_attr]
+                        except (KeyError, AttributeError):
+                            pass
+
                     darwin_annotations.extend(
                         self._convert_image_annotation_to_v7(
                             annotation,
@@ -498,6 +516,7 @@ class DarwinAPI(foua.AnnotationAPI):
                             backend,
                             slot_name,
                             attributes,
+                            instance_id=instance_id,
                         )
                     )
 
@@ -527,6 +546,7 @@ class DarwinAPI(foua.AnnotationAPI):
         backend,
         slot_name="0",
         attributes=None,
+        instance_id=None,
     ):
         """
         Converts a FiftyOne annotation to a Darwin annotation
@@ -544,6 +564,11 @@ class DarwinAPI(foua.AnnotationAPI):
 
         sample : fiftyone.core.sample.Sample
             The FiftyOne sample to convert.
+
+        instance_id : optional
+            Pre-resolved instance ID. When provided, used directly instead
+            of reading annotation.index.  Allows the caller to fall back to
+            a label-schema-mapped attribute for non-tracker models.
 
         Returns
         -------
@@ -563,11 +588,16 @@ class DarwinAPI(foua.AnnotationAPI):
             sample_name = path_list[-1]
             annotation_label = sample_name
 
+        # Use the pre-resolved instance_id when available; fall back to the
+        # native FiftyOne tracking field for backward compatibility.
+        if instance_id is None:
+            instance_id = getattr(annotation, "index", None)
+
         darwin_annotation = _v7_basic_annotation(
             label=annotation_label,
             confidence=annotation.confidence,
             atts=attributes,
-            instance_id=annotation.index,
+            instance_id=instance_id,
             slot_name=slot_name,
         )
         logging.info(f"Darwin annotation: {darwin_annotation}")
