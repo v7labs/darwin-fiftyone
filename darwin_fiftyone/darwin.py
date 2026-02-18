@@ -692,6 +692,8 @@ class DarwinAPI(foua.AnnotationAPI):
                                 "tag",
                                 "polygon",
                                 "keypoint",
+                                "instance_id",
+                                "text",
                             ]
                             darwin_frame = {
                                 k: annotation[k]
