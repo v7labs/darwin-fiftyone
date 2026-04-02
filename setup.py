@@ -25,5 +25,6 @@ setup(
     author="Simon Edwardsson & Mark Cox-Smith",
     packages=find_packages(),
     url="https://github.com/v7labs/darwin_fiftyone",
+    python_requires=">=3.10",
     install_requires=requirements,
 )
